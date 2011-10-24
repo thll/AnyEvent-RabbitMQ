@@ -110,11 +110,6 @@ sub connect {
                     $self->_disconnect();
                     $args{on_close}->($message);
                 },
-                on_drain => sub {
-                    my ($handle) = @_;
-                    $self->{drain_condvar}->send
-                        if exists $self->{drain_condvar};
-                },
             );
             $self->_read_loop($args{on_close}, $args{on_read_failure});
             $self->_start(%args,);
@@ -459,7 +454,7 @@ sub _push_read_and_valid {
 
 sub _push_write {
     my $self = shift;
-    my ($output, $id,) = @_;
+    my ($output, $id, $on_drain_cb) = @_;
 
     if ($output->isa('Net::AMQP::Protocol::Base')) {
         $output = $output->frame_wrap;
@@ -472,6 +467,11 @@ sub _push_write {
 
     $self->{_handle}->push_write($output->to_raw_frame())
         if $self->{_handle}; # Careful - could have gone (global destruction)
+
+    if ($on_drain_cb && $self->{_handle}) {
+        $self->{_handle}->on_drain($on_drain_cb);
+    }
+
     return;
 }
 
@@ -497,13 +497,25 @@ sub _check_open {
 
 sub drain_writes {
     my ($self, $timeout) = shift;
+
     $self->{drain_condvar} = AnyEvent->condvar;
+
+    $self->{_handle}->on_drain(
+        sub {
+            my ($handle) = @_;
+            $self->{drain_condvar}->send
+                if exists $self->{drain_condvar};
+        }
+    );
+
     if ($timeout) {
         $self->{drain_timer} = AnyEvent->timer( after => $timeout, sub {
             $self->{drain_condvar}->croak("Timed out after $timeout");
         });
     }
+
     $self->{drain_condvar}->recv;
+
     delete $self->{drain_timer};
 }
 

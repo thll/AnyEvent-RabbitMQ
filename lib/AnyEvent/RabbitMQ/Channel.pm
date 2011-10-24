@@ -273,6 +273,7 @@ sub publish {
     my $header_args = delete $args{header}    || {};
     my $body        = delete $args{body}      || '';
     my $return_cb   = delete $args{on_return} || sub {};
+    my $drain_cb    = delete $args{on_drain};
 
     $self->_publish(
         %args,
@@ -280,6 +281,7 @@ sub publish {
         $header_args, $body,
     )->_body(
         $body,
+        $drain_cb,
     );
 
     return $self if !$args{mandatory} && !$args{immediate};
@@ -340,11 +342,12 @@ sub _header {
 }
 
 sub _body {
-    my ($self, $body,) = @_;
+    my ($self, $body, $drain_cb) = @_;
 
     $self->{connection}->_push_write(
         Net::AMQP::Frame::Body->new(payload => $body),
         $self->{id},
+        $drain_cb,
     );
 
     return $self;
