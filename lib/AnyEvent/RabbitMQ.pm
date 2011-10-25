@@ -20,7 +20,7 @@ use Net::AMQP::Common qw(:all);
 use AnyEvent::RabbitMQ::Channel;
 use AnyEvent::RabbitMQ::LocalQueue;
 
-our $VERSION = '1.0501';
+our $VERSION = '1.0502';
 
 Readonly my $DEFAULT_AMQP_SPEC
     => File::ShareDir::dist_dir("AnyEvent-RabbitMQ") . '/fixed_amqp0-8.xml';
@@ -109,6 +109,7 @@ sub connect {
                     $self->{_is_open} = 0;
                     $self->_disconnect();
                     $args{on_close}->($message);
+                    $self->{_on_error_cb}->($message) if $self->{_on_error_cb};
                 },
             );
             $self->_read_loop($args{on_close}, $args{on_read_failure});
@@ -454,7 +455,7 @@ sub _push_read_and_valid {
 
 sub _push_write {
     my $self = shift;
-    my ($output, $id, $on_drain_cb) = @_;
+    my ($output, $id) = @_;
 
     if ($output->isa('Net::AMQP::Protocol::Base')) {
         $output = $output->frame_wrap;
@@ -467,10 +468,6 @@ sub _push_write {
 
     $self->{_handle}->push_write($output->to_raw_frame())
         if $self->{_handle}; # Careful - could have gone (global destruction)
-
-    if ($on_drain_cb && $self->{_handle}) {
-        $self->{_handle}->on_drain($on_drain_cb);
-    }
 
     return;
 }

@@ -273,7 +273,17 @@ sub publish {
     my $header_args = delete $args{header}    || {};
     my $body        = delete $args{body}      || '';
     my $return_cb   = delete $args{on_return} || sub {};
-    my $drain_cb    = delete $args{on_drain};
+    my $success_cb  = delete $args{on_success};
+    my $failure_cb  = delete $args{on_failure};
+
+    # if anything happens to the socket now, the caller has to get a chance to
+    # be notified
+    if ($failure_cb) {
+        $self->{connection}{_on_error_cb} = sub {
+            delete $self->{connection}{_on_error_cb};
+            $failure_cb->(@_);
+        };
+    };
 
     $self->_publish(
         %args,
@@ -281,14 +291,25 @@ sub publish {
         $header_args, $body,
     )->_body(
         $body,
-        $drain_cb,
     );
 
-    return $self if !$args{mandatory} && !$args{immediate};
+    if ($args{mandatory} || $args{immediate}) {
+        $self->{_return_cbs}->{
+            ($args{exchange} || '') . '_' . $args{routing_key}
+        } = $return_cb;
+    }
 
-    $self->{_return_cbs}->{
-        ($args{exchange} || '') . '_' . $args{routing_key}
-    } = $return_cb;
+    # set callback for 'on_drain' on the handle so the caller will know when
+    # everything hast been successfully pushed out to the socket
+    if ($success_cb && $self->{connection}{_handle}) {
+        $self->{connection}{_handle}->on_drain(
+            sub {
+                my $handle = shift;
+                $handle->on_drain();
+                $success_cb->();
+            }
+        );
+    }
 
     return $self;
 }
@@ -342,12 +363,11 @@ sub _header {
 }
 
 sub _body {
-    my ($self, $body, $drain_cb) = @_;
+    my ($self, $body) = @_;
 
     $self->{connection}->_push_write(
         Net::AMQP::Frame::Body->new(payload => $body),
         $self->{id},
-        $drain_cb,
     );
 
     return $self;
